@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useServerFn } from "@tanstack/react-start";
 import { useEffect, useRef, useState } from "react";
 import {
   Star,
@@ -14,7 +13,10 @@ import {
   X,
   RotateCcw,
 } from "lucide-react";
-import { getRecommendations, type RecommendationResult } from "@/lib/recommend.functions";
+type RecommendationResult = {
+  identity: { title: string; emoji: string; description: string; traits: { label: string; pct: number }[] };
+  recommendations: { title: string; author: string; reason: string; amazonUrl: string }[];
+};
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -448,37 +450,46 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ identity: RecommendationResult["identity"]; recs: RecWithCover[] } | null>(null);
-  const recommend = useServerFn(getRecommendations);
   const fired = useRef(false);
+
+  async function enrichWithCovers(recommendations: any[]) {
+    return Promise.all(
+      recommendations.map(async (r) => {
+        try {
+          const res = await fetch(
+            `https://openlibrary.org/search.json?q=${encodeURIComponent(`${r.title} ${r.author}`)}&limit=1`
+          );
+          const json = await res.json();
+          const id = json.docs?.[0]?.cover_i;
+          return { ...r, coverUrl: coverUrl(id, "M") ?? undefined };
+        } catch {
+          return r;
+        }
+      })
+    );
+  }
 
   useEffect(() => {
     if (fired.current) return;
     fired.current = true;
     (async () => {
       try {
-        const data = await recommend({
-          data: { books: selected.map((b) => ({ title: b.title, author: b.author, rating: b.rating })) },
-        });
+        const data = await fetch("/api/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            books: selected.map((b) => ({ title: b.title, author: b.author, rating: b.rating })),
+          }),
+        }).then((r) => r.json());
 
-        const enriched = await Promise.all(
-          data.recommendations.map(async (r) => {
-            try {
-              const res = await fetch(`https://openlibrary.org/search.json?q=${encodeURIComponent(`${r.title} ${r.author}`)}&limit=1`);
-              const json = await res.json();
-              const id = json.docs?.[0]?.cover_i;
-              return { ...r, coverUrl: coverUrl(id, "M") ?? undefined };
-            } catch { return r; }
-          })
-        );
-
-        setResult({ identity: data.identity, recs: enriched });
+        const recs = await enrichWithCovers(data.recommendations);
+        setResult({ identity: data.identity, recs });
       } catch (err) {
         setError(err instanceof Error ? err.message : "Something went wrong.");
       } finally {
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (loading) {
@@ -507,8 +518,6 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
 
   return (
     <section className="space-y-8">
-
-      {/* ── Reader Identity card at top of results ── */}
       {result?.identity && (
         <div className="rounded-2xl border border-border bg-card p-6 shadow-[0_10px_40px_-15px_oklch(0.3_0.05_45/0.2)]">
           <div className="mb-3 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-accent">
@@ -523,7 +532,6 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
               <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{result.identity.description}</p>
             </div>
           </div>
-          {/* Taste bars */}
           <div className="mt-5 space-y-2.5">
             {result.identity.traits.map((t) => (
               <div key={t.label}>
@@ -540,7 +548,6 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
         </div>
       )}
 
-      {/* ── Recommendations ── */}
       <div className="text-center">
         <div className="mb-2 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-accent">
           <span className="h-px w-8 bg-accent/40" />
