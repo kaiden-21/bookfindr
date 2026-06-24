@@ -13,10 +13,6 @@ import {
   X,
   RotateCcw,
 } from "lucide-react";
-type RecommendationResult = {
-  identity: { title: string; emoji: string; description: string; traits: { label: string; pct: number }[] };
-  recommendations: { title: string; author: string; reason: string; amazonUrl: string }[];
-};
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -42,7 +38,26 @@ type OLBook = {
 };
 
 type SelectedBook = OLBook & { rating: number };
-type RecWithCover = RecommendationResult["recommendations"][0] & { coverUrl?: string };
+
+type ReaderIdentity = {
+  title: string;
+  emoji: string;
+  description: string;
+  traits: { label: string; pct: number }[];
+};
+
+type Recommendation = {
+  title: string;
+  author: string;
+  reason: string;
+  amazonUrl: string;
+  coverUrl?: string;
+};
+
+type ApiResult = {
+  identity: ReaderIdentity;
+  recommendations: Recommendation[];
+};
 
 const NYT_KEY = "HN6GlTJ3dZyfoWojzSXbYNtCVP25KDG9UD3T3brzihTAV5rI";
 
@@ -61,6 +76,23 @@ function parseDocs(docs: any[]): OLBook[] {
       year: d.first_publish_year,
     }))
     .filter((b) => b.coverId);
+}
+
+async function enrichWithCovers(recommendations: Recommendation[]) {
+  return Promise.all(
+    recommendations.map(async (r) => {
+      try {
+        const res = await fetch(
+          `https://openlibrary.org/search.json?q=${encodeURIComponent(`${r.title} ${r.author}`)}&limit=1`
+        );
+        const json = await res.json();
+        const id = json.docs?.[0]?.cover_i;
+        return { ...r, coverUrl: coverUrl(id, "M") ?? undefined };
+      } catch {
+        return r;
+      }
+    })
+  );
 }
 
 function Index() {
@@ -444,37 +476,20 @@ function BigStars({ value, onChange }: { value: number; onChange: (n: number) =>
   );
 }
 
-/* ------------ Step 3: Results + Identity at top ------------ */
+/* ------------ Step 3: Results + Identity ------------ */
 
 function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRestart: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ identity: RecommendationResult["identity"]; recs: RecWithCover[] } | null>(null);
+  const [result, setResult] = useState<{ identity: ReaderIdentity; recs: Recommendation[] } | null>(null);
   const fired = useRef(false);
-
-  async function enrichWithCovers(recommendations: any[]) {
-    return Promise.all(
-      recommendations.map(async (r) => {
-        try {
-          const res = await fetch(
-            `https://openlibrary.org/search.json?q=${encodeURIComponent(`${r.title} ${r.author}`)}&limit=1`
-          );
-          const json = await res.json();
-          const id = json.docs?.[0]?.cover_i;
-          return { ...r, coverUrl: coverUrl(id, "M") ?? undefined };
-        } catch {
-          return r;
-        }
-      })
-    );
-  }
 
   useEffect(() => {
     if (fired.current) return;
     fired.current = true;
     (async () => {
       try {
-        const data = await fetch("/api/recommend", {
+        const data: ApiResult = await fetch("/api/recommend", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -518,6 +533,8 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
 
   return (
     <section className="space-y-8">
+
+      {/* Reader Identity Card */}
       {result?.identity && (
         <div className="rounded-2xl border border-border bg-card p-6 shadow-[0_10px_40px_-15px_oklch(0.3_0.05_45/0.2)]">
           <div className="mb-3 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-accent">
@@ -548,6 +565,7 @@ function ResultsStep({ selected, onRestart }: { selected: SelectedBook[]; onRest
         </div>
       )}
 
+      {/* Recommendations */}
       <div className="text-center">
         <div className="mb-2 inline-flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-accent">
           <span className="h-px w-8 bg-accent/40" />
